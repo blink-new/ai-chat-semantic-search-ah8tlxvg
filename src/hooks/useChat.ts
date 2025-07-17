@@ -8,23 +8,12 @@ export function useChat() {
   const [isLoading, setIsLoading] = useState(false)
   const [user, setUser] = useState<any>(null)
 
-  // Load user and chats on mount
-  useEffect(() => {
-    const unsubscribe = blink.auth.onAuthStateChanged((state) => {
-      setUser(state.user)
-      if (state.user) {
-        loadChats()
-      }
-    })
-    return unsubscribe
-  }, [loadChats])
-
-  const loadChats = useCallback(async () => {
-    if (!user?.id) return
+  const loadChats = useCallback(async (userId: string) => {
+    if (!userId) return
     
     try {
       // For now, use localStorage until database is available
-      const savedChats = localStorage.getItem(`chats_${user.id}`)
+      const savedChats = localStorage.getItem(`chats_${userId}`)
       if (savedChats) {
         const parsedChats = JSON.parse(savedChats)
         setChats(parsedChats)
@@ -32,7 +21,18 @@ export function useChat() {
     } catch (error) {
       console.error('Error loading chats:', error)
     }
-  }, [user?.id])
+  }, [])
+
+  // Load user and chats on mount
+  useEffect(() => {
+    const unsubscribe = blink.auth.onAuthStateChanged((state) => {
+      setUser(state.user)
+      if (state.user?.id) {
+        loadChats(state.user.id)
+      }
+    })
+    return unsubscribe
+  }, [loadChats])
 
   const saveChats = useCallback((updatedChats: Chat[]) => {
     if (!user?.id) return
@@ -129,6 +129,7 @@ export function useChat() {
     if (!currentChatId || !user?.id) return
 
     setIsLoading(true)
+    let assistantMessage: Message | null = null
     
     try {
       // Add user message
@@ -139,7 +140,7 @@ export function useChat() {
       })
 
       // Add assistant message placeholder
-      const assistantMessage = addMessage(currentChatId, {
+      assistantMessage = addMessage(currentChatId, {
         chatId: currentChatId,
         role: 'assistant',
         content: ''
@@ -151,9 +152,9 @@ export function useChat() {
       
       // Prepare messages for AI (exclude the empty assistant message we just added)
       const aiMessages = messages
-        .filter(msg => msg.id !== assistantMessage.id)
+        .filter(msg => msg.id !== assistantMessage.id && msg.content.trim() !== '')
         .map(msg => ({
-          role: msg.role,
+          role: msg.role as 'user' | 'assistant',
           content: msg.content
         }))
 
@@ -161,19 +162,21 @@ export function useChat() {
       let fullResponse = ''
       await blink.ai.streamText(
         {
-          messages: aiMessages as any,
-          model: 'gpt-4o-mini'
+          messages: aiMessages,
+          model: 'gpt-4.1-mini'
         },
         (chunk) => {
           fullResponse += chunk
-          updateMessage(currentChatId, assistantMessage.id, fullResponse)
+          updateMessage(currentChatId, assistantMessage!.id, fullResponse)
         }
       )
 
     } catch (error) {
       console.error('Error sending message:', error)
-      // Update the assistant message with error
-      updateMessage(currentChatId, '', 'Sorry, I encountered an error. Please try again.')
+      // Update the assistant message with error if it exists
+      if (assistantMessage?.id) {
+        updateMessage(currentChatId, assistantMessage.id, 'Sorry, I encountered an error. Please try again.')
+      }
     } finally {
       setIsLoading(false)
     }
