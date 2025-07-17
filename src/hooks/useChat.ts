@@ -54,7 +54,6 @@ export function useChat() {
 
     const updatedChats = [newChat, ...chats]
     saveChats(updatedChats)
-    setCurrentChatId(newChat.id)
     return newChat.id
   }, [user?.id, chats, saveChats])
 
@@ -74,43 +73,58 @@ export function useChat() {
       createdAt: new Date().toISOString()
     }
 
-    const updatedChats = chats.map(chat => {
-      if (chat.id === chatId) {
-        const updatedMessages = [...chat.messages, newMessage]
-        return {
-          ...chat,
-          messages: updatedMessages,
-          updatedAt: new Date().toISOString(),
-          // Auto-generate title from first user message
-          title: chat.messages.length === 0 && message.role === 'user' 
-            ? message.content.slice(0, 50) + (message.content.length > 50 ? '...' : '')
-            : chat.title
+    setChats(prevChats => {
+      const updatedChats = prevChats.map(chat => {
+        if (chat.id === chatId) {
+          const updatedMessages = [...chat.messages, newMessage]
+          return {
+            ...chat,
+            messages: updatedMessages,
+            updatedAt: new Date().toISOString(),
+            // Auto-generate title from first user message
+            title: chat.messages.length === 0 && message.role === 'user' && message.content.trim()
+              ? message.content.trim().slice(0, 50) + (message.content.trim().length > 50 ? '...' : '')
+              : chat.title
+          }
         }
+        return chat
+      })
+      
+      // Save to localStorage
+      if (user?.id) {
+        localStorage.setItem(`chats_${user.id}`, JSON.stringify(updatedChats))
       }
-      return chat
+      
+      return updatedChats
     })
 
-    saveChats(updatedChats)
     return newMessage
-  }, [chats, saveChats])
+  }, [user?.id])
 
   const updateMessage = useCallback((chatId: string, messageId: string, content: string) => {
-    const updatedChats = chats.map(chat => {
-      if (chat.id === chatId) {
-        const updatedMessages = chat.messages.map(msg =>
-          msg.id === messageId ? { ...msg, content } : msg
-        )
-        return {
-          ...chat,
-          messages: updatedMessages,
-          updatedAt: new Date().toISOString()
+    setChats(prevChats => {
+      const updatedChats = prevChats.map(chat => {
+        if (chat.id === chatId) {
+          const updatedMessages = chat.messages.map(msg =>
+            msg.id === messageId ? { ...msg, content } : msg
+          )
+          return {
+            ...chat,
+            messages: updatedMessages,
+            updatedAt: new Date().toISOString()
+          }
         }
-      }
-      return chat
-    })
+        return chat
+      })
 
-    saveChats(updatedChats)
-  }, [chats, saveChats])
+      // Save to localStorage
+      if (user?.id) {
+        localStorage.setItem(`chats_${user.id}`, JSON.stringify(updatedChats))
+      }
+
+      return updatedChats
+    })
+  }, [user?.id])
 
   const deleteChat = useCallback((chatId: string) => {
     const updatedChats = chats.filter(chat => chat.id !== chatId)
@@ -126,7 +140,7 @@ export function useChat() {
   }, [chats, currentChatId])
 
   const sendMessage = useCallback(async (content: string) => {
-    if (!currentChatId || !user?.id) return
+    if (!currentChatId || !user?.id || !content.trim()) return
 
     setIsLoading(true)
     let assistantMessage: Message | null = null
@@ -136,7 +150,7 @@ export function useChat() {
       const userMessage = addMessage(currentChatId, {
         chatId: currentChatId,
         role: 'user',
-        content
+        content: content.trim()
       })
 
       // Add assistant message placeholder
@@ -146,17 +160,13 @@ export function useChat() {
         content: ''
       })
 
-      // Get current chat messages for context
-      const currentChat = getCurrentChat()
-      const messages = currentChat?.messages || []
-      
-      // Prepare messages for AI (exclude the empty assistant message we just added)
-      const aiMessages = messages
-        .filter(msg => msg.id !== assistantMessage.id && msg.content.trim() !== '')
-        .map(msg => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content
-        }))
+      // Prepare messages for AI - use the user message we just created
+      const aiMessages = [{
+        role: 'user' as const,
+        content: content.trim()
+      }]
+
+      console.log('Sending messages to AI:', aiMessages)
 
       // Stream response from AI
       let fullResponse = ''
@@ -167,7 +177,9 @@ export function useChat() {
         },
         (chunk) => {
           fullResponse += chunk
-          updateMessage(currentChatId, assistantMessage!.id, fullResponse)
+          if (assistantMessage?.id) {
+            updateMessage(currentChatId, assistantMessage.id, fullResponse)
+          }
         }
       )
 
@@ -180,7 +192,7 @@ export function useChat() {
     } finally {
       setIsLoading(false)
     }
-  }, [currentChatId, user?.id, addMessage, updateMessage, getCurrentChat])
+  }, [currentChatId, user?.id, addMessage, updateMessage])
 
   return {
     chats,
